@@ -1,0 +1,32 @@
+name: foundation-checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "cto/**"
+
+permissions:
+  contents: read
+
+jobs:
+  repository-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block obvious committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RIE --exclude-dir=.git --exclude='*.lock' '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,})' .; then
+            echo "Potential secret material detected."
+            exit 1
+          fi
+      - name: Require core governance documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in README.md AGENTS.md SECURITY.md docs/ARCHITECTURE.md docs/SECURITY_BOUNDARY.md docs/UAT_RELEASE_GATES.md docs/COMMERCIAL_MODEL.md docs/TENANCY_MODEL.md docs/ADAPTER_CONTRACT.md; do
+            test -f "$f" || { echo "Missing $f"; exit 1; }
+          done
