@@ -45,6 +45,13 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal((await call("GET","/v1/me",undefined,{"x-ocean-tenant":b.slug,Authorization:aHeaders.Authorization})).status,401);
     assert.equal((await call("POST","/v1/auth/login",{tenantSlug:b.slug,email:a.email,password:a.password})).status,401);
     assert.equal((await call("GET","/v1/me",undefined,{"x-ocean-tenant":a.slug})).status,401);
+    // A published customer-facing activation cannot be successful until a
+    // real business product is provisioned and approved for production.
+    const originalNodeEnv=process.env.NODE_ENV;
+    process.env.NODE_ENV="production";
+    const deniedProductionActivation=await call("PUT","/v1/modules/AIG_TRAVEL/activation",{enabled:true},aHeaders);
+    assert.equal(deniedProductionActivation.status,423);
+    process.env.NODE_ENV=originalNodeEnv;
     assert.equal((await call("PUT","/v1/modules/AIG_TRAVEL/activation",{enabled:true},aHeaders)).status,200);
     const aModules=await call("GET","/v1/modules",undefined,aHeaders);
     const bModules=await call("GET","/v1/modules",undefined,bHeaders);
