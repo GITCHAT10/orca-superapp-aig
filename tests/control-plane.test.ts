@@ -113,6 +113,22 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(logout.status,200);
     assert.equal((await call("GET","/v1/me",undefined,aHeaders)).status,401);
     assert.equal((await call("GET","/v1/me",undefined,bHeaders)).status,200);
+    // A login failure storm for Tenant A must trigger a durable lockout,
+    // without taking down Tenant B (same service/process).
+    for (let attempt=0;attempt<5;attempt++) {
+      const wrong=await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:a.email,password:"intentionally-incorrect"});
+      assert.equal(wrong.status,401);
+    }
+    const blocked=await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:a.email,password:a.password});
+    assert.equal(blocked.status,429,"Account must be locked after five failures");
+    assert.equal((await call("GET","/v1/me",undefined,bHeaders)).status,200);
+    const aFailureState=await withTenant(pool,aCreated.body.tenantId,async client =>
+      client.query<{failed_attempts:number;blocked:boolean}>(
+        "SELECT failed_attempts,blocked_until>now() AS blocked FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2",
+        [aCreated.body.tenantId,a.email],
+      ));
+    assert.equal(aFailureState.rows[0]?.blocked,true);
+    assert.equal(aFailureState.rows[0]?.failed_attempts,5);
   } finally {await app.close();await pool.end();}
 });
 
