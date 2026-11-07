@@ -45,3 +45,5 @@ jobs:
         run: npm run db:migrate
       - name: Exercise real two-tenant HTTP workflows and PostgreSQL RLS
         run: npm test
+      - name: Build locked staging Docker image (no deployment)
+        run: docker build --pull --tag ocean-cloud:ci .
