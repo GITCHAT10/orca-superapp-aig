@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appPool, withTenant } from "../src/db.js";
 import { createOceanApp } from "../src/app.js";
+import { hashPassword } from "../src/password.js";
 
 test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activation, usage and audit", async () => {
   process.env.OCEAN_SIGNUP_ENABLED="true";
@@ -53,6 +54,45 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(rlsA.rows[0].n,0);
     const unscoped=await pool.query("SELECT COUNT(*)::int AS n FROM ocean_audit_events");
     assert.equal(unscoped.rows[0].n,0,"RLS must fail closed without tenant context");
+    // P1/P2: maker-checker approvals, durable outbox and isolated agent registry.
+    const request=await call("POST","/v1/workflows/approvals",{actionKey:"CONNECT_PRODUCT",resourceKey:"PRESTIGE_HOLIDAYS_OS"},aHeaders);
+    assert.equal(request.status,201,JSON.stringify(request.body));
+    const selfDecision=await call("POST","/v1/workflows/approvals/"+request.body.id+"/decision",{decision:"APPROVED"},aHeaders);
+    assert.equal(selfDecision.status,409,"Maker must not approve own request");
+    const otherTenantDecision=await call("POST","/v1/workflows/approvals/"+request.body.id+"/decision",{decision:"APPROVED"},bHeaders);
+    assert.equal(otherTenantDecision.status,409,"Other tenant may not approve");
+    const reviewerPassword="AnotherFakePassword!789";
+    const reviewerEmail="checker-"+suffix+"@example.test";
+    const hashed=await hashPassword(reviewerPassword);
+    const reviewer=await pool.query<{id:string}>(
+      "INSERT INTO ocean_users(email,password_salt,password_hash) VALUES($1,$2,$3) RETURNING id",
+      [reviewerEmail,hashed.salt,hashed.hash],
+    );
+    await withTenant(pool,aCreated.body.tenantId,async client=>{
+      await client.query(
+        "INSERT INTO ocean_memberships(tenant_id,user_id,role) VALUES($1,$2,'ADMIN')",
+        [aCreated.body.tenantId,reviewer.rows[0]!.id],
+      );
+    });
+    const checker=await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:reviewerEmail,password:reviewerPassword});
+    assert.equal(checker.status,200);
+    const checkerHeaders={"x-ocean-tenant":a.slug,Authorization:"Bearer "+checker.body.accessToken};
+    const approved=await call("POST","/v1/workflows/approvals/"+request.body.id+"/decision",{decision:"APPROVED"},checkerHeaders);
+    assert.equal(approved.status,200,JSON.stringify(approved.body));
+    assert.equal(approved.body.executed,false,"Approval must not trigger an external action");
+    assert.equal(approved.body.eventDelivery,"PENDING");
+    const duplicateApproval=await call("POST","/v1/workflows/approvals/"+request.body.id+"/decision",{decision:"APPROVED"},checkerHeaders);
+    assert.equal(duplicateApproval.status,409);
+    const aOutbox=await call("GET","/v1/outbox",undefined,aHeaders);
+    const bOutbox=await call("GET","/v1/outbox",undefined,bHeaders);
+    assert.ok(aOutbox.body.events.some((x:{event_type:string})=>x.event_type==="APPROVAL_DECIDED"));
+    assert.equal(bOutbox.body.events.length,0);
+    assert.equal((await call("POST","/v1/agents",{agentKey:"ocean-advisor",description:"Synthetic test advisory"},aHeaders)).status,201);
+    assert.equal((await call("GET","/v1/agents",undefined,bHeaders)).body.agents.length,0);
+    const adapter=await call("POST","/v1/product-contracts/PRESTIGE_HOLIDAYS_OS/register",{},aHeaders);
+    assert.equal(adapter.status,201);
+    assert.equal(adapter.body.status,"DISCONNECTED");
+    assert.equal((await call("GET","/v1/product-contracts",undefined,aHeaders)).body.privateBrainCoralAccess,false);
     const logout=await call("POST","/v1/auth/logout",{},aHeaders);
     assert.equal(logout.status,200);
     assert.equal((await call("GET","/v1/me",undefined,aHeaders)).status,401);
