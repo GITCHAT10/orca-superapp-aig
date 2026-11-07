@@ -19,6 +19,16 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     return {status:response.statusCode, body:response.json()};
   }
   try {
+    // Readiness must inspect actual PostgreSQL FORCE RLS and a non-owner runtime.
+    const readiness=await call("GET","/readyz");
+    assert.equal(readiness.status,200,JSON.stringify(readiness.body));
+    assert.equal(readiness.body.checksPassed,5);
+    const priorKey=process.env.OCEAN_STORAGE_KEY_HEX;
+    delete process.env.OCEAN_STORAGE_KEY_HEX;
+    const unsafeReadiness=await call("GET","/readyz");
+    assert.equal(unsafeReadiness.status,503);
+    assert.ok(unsafeReadiness.body.failedChecks.includes("storageKeyConfigured"));
+    process.env.OCEAN_STORAGE_KEY_HEX=priorKey;
     const aCreated=await call("POST","/v1/tenants/register",a);
     const bCreated=await call("POST","/v1/tenants/register",b);
     assert.equal(aCreated.status,201,JSON.stringify(aCreated.body));
