@@ -195,7 +195,12 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     const p=request.oceanPrincipal!;
     const {key}=z.object({key:z.string().regex(/^[A-Z_]{3,50}$/)}).parse(request.params);
     const body=activateSchema.parse(request.body);
-    // Activation grants an entitlement record, NOT a live product deployment.
+    // No commercial provisioning or entitlement activation without an
+    // independently certified product adapter and production release gate.
+    if (body.enabled && process.env.NODE_ENV === "production") {
+      return reply.code(423).send({error:"Module activation unavailable until commercial provisioning is certified"});
+    }
+    // In UAT this is an entitlement simulation, never a live product deployment.
     return withTenant(pool,p.tenantId,async client => {
       const catalog=await client.query("SELECT 1 FROM ocean_module_catalog WHERE module_key=$1",[key]);
       if(!catalog.rowCount) return reply.code(404).send({error:"Unknown module"});
