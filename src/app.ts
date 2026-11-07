@@ -116,13 +116,40 @@ export function createOceanApp(pool: Pool): FastifyInstance {
       [body.tenantSlug,body.email],
     );
     const identity = result.rows[0];
-    if (!identity || !(await verifyPassword(body.password, identity.password_salt, identity.password_hash))) {
+    if (!identity) return reply.code(401).send({ error: "Invalid credentials" });
+    // Persistent, tenant-bound account lockout. A load balancer must also enforce
+    // independent IP/network quotas: this alone does not stop distributed abuse.
+    const locked = await withTenant(pool, identity.tenant_id, async client => {
+      const attempt = await client.query<{blocked:boolean}>(
+        "SELECT (blocked_until > now()) AS blocked FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2",
+        [identity.tenant_id, body.email],
+      );
+      return attempt.rows[0]?.blocked === true;
+    });
+    if (locked) return reply.code(429).header("Retry-After", "900").send({ error: "Login temporarily unavailable" });
+    if (!(await verifyPassword(body.password, identity.password_salt, identity.password_hash))) {
+      await withTenant(pool, identity.tenant_id, async client => {
+        await client.query(
+          `INSERT INTO ocean_auth_failures(tenant_id,email,failed_attempts,blocked_until)
+           VALUES($1,$2,1,NULL)
+           ON CONFLICT(tenant_id,email) DO UPDATE SET
+             failed_attempts = CASE WHEN ocean_auth_failures.blocked_until <= now() THEN 1
+                                    ELSE least(ocean_auth_failures.failed_attempts+1,20) END,
+             blocked_until = CASE WHEN ocean_auth_failures.blocked_until > now() THEN ocean_auth_failures.blocked_until
+                                  WHEN ocean_auth_failures.blocked_until <= now() THEN NULL
+                                  WHEN ocean_auth_failures.failed_attempts+1 >= 5 THEN now()+interval '15 minutes'
+                                  ELSE NULL END,
+             updated_at=now()`,
+          [identity.tenant_id, body.email],
+        );
+      });
       return reply.code(401).send({ error: "Invalid credentials" });
     }
     const token = newSessionToken();
     const authorized = await withTenant(pool, identity.tenant_id, async client => {
       const member = await client.query<{role:MemberRole}>("SELECT role FROM ocean_memberships WHERE tenant_id=$1 AND user_id=$2", [identity.tenant_id,identity.user_id]);
       if (!member.rows[0]) return false;
+      await client.query("DELETE FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2", [identity.tenant_id, body.email]);
       await client.query(
         "INSERT INTO ocean_sessions(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')",
         [identity.tenant_id,identity.user_id,tokenDigest(token)],
