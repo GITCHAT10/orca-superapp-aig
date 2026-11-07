@@ -57,6 +57,23 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(acceptedInvite.status,201,JSON.stringify(acceptedInvite.body));
     assert.equal(acceptedInvite.body.role,"MEMBER");
     assert.equal((await call("POST","/v1/tenants/invitations/accept",inviteData)).status,400,"Invite must be single-use");
+    const revokeEmail="revoke-"+suffix+"@example.test";
+    const revokedInvite=await call("POST","/v1/tenants/invitations",{email:revokeEmail,role:"MEMBER"},aHeaders);
+    assert.equal(revokedInvite.status,201);
+    const revocation=await call("POST","/v1/tenants/invitations/"+revokedInvite.body.invitationId+"/revoke",{},aHeaders);
+    assert.equal(revocation.status,200);
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",{
+      tenantSlug:a.slug,email:revokeEmail,inviteToken:revokedInvite.body.inviteToken,password:newMemberPassword,
+    })).status,400,"Revoked invitation must never work");
+    const expiryEmail="expired-"+suffix+"@example.test";
+    const expiredInvite=await call("POST","/v1/tenants/invitations",{email:expiryEmail,role:"MEMBER"},aHeaders);
+    assert.equal(expiredInvite.status,201);
+    await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query("UPDATE ocean_invitations SET expires_at=now()-interval '1 minute' WHERE id=$1 AND tenant_id=$2",
+        [expiredInvite.body.invitationId,aCreated.body.tenantId]));
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",{
+      tenantSlug:a.slug,email:expiryEmail,inviteToken:expiredInvite.body.inviteToken,password:newMemberPassword,
+    })).status,400,"Expired invitation must never work");
     const memberLogin=await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:invitedEmail,password:newMemberPassword});
     assert.equal(memberLogin.status,200);
     const memberHeaders={"x-ocean-tenant":a.slug,Authorization:"Bearer "+memberLogin.body.accessToken};
