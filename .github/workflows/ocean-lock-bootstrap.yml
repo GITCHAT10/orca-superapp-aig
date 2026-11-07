@@ -1,0 +1,34 @@
+name: OCEAN CLOUD one-time dependency lock bootstrap
+on:
+  push:
+    branches:
+      - 'feat/ocean-cloud-saas-control-plane-20261107'
+permissions:
+  contents: write
+jobs:
+  generate-lock:
+    if: github.ref == 'refs/heads/feat/ocean-cloud-saas-control-plane-20261107' && github.repository == 'GITCHAT10/orca-superapp-aig'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Materialize locked dependency graph without executing install scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f package-lock.json; then
+            echo "Lockfile already committed; nothing to change."
+            exit 0
+          fi
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          test -s package-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build(ocean): commit npm dependency lockfile for reproducible CI"
+          git push origin HEAD:feat/ocean-cloud-saas-control-plane-20261107
