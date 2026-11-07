@@ -5,6 +5,7 @@ import { z } from "zod";
 import { withTenant } from "./db.js";
 import { hashPassword, verifyPassword, newSessionToken, tokenDigest } from "./password.js";
 import { registerExtendedRoutes } from "./extended.js";
+import { registerOceanStorageRoutes } from "./storage.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -220,5 +221,6 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     });
   });
   void registerExtendedRoutes(app,pool);
+  void registerOceanStorageRoutes(app,pool);
   return app;
 }
