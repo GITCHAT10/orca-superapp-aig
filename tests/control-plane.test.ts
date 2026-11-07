@@ -12,7 +12,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
   const suffix=randomUUID().slice(0,8);
   const a={slug:"tenant-a-"+suffix,displayName:"Test Tenant A",email:"owner-a-"+suffix+"@example.test",password:"NotARealCredential!234"};
   const b={slug:"tenant-b-"+suffix,displayName:"Test Tenant B",email:"owner-b-"+suffix+"@example.test",password:"NotARealCredential!234"};
-  async function call(method:"GET"|"POST"|"PUT", url:string, payload?:unknown, headers?:Record<string,string>) {
+  async function call(method:"GET"|"POST"|"PUT", url:string, payload?:Record<string, unknown>, headers?:Record<string,string>) {
     const response=await app.inject({method,url,payload,headers:headers??{}});
     return {status:response.statusCode, body:response.json()};
   }
