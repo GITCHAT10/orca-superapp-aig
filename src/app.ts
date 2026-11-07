@@ -232,8 +232,22 @@ export function createOceanApp(pool: Pool): FastifyInstance {
         "INSERT INTO ocean_usage_events(tenant_id,module_key,idempotency_key,quantity,recorded_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,idempotency_key) DO NOTHING RETURNING id",
         [p.tenantId,body.moduleKey,body.idempotencyKey,body.quantity,p.userId],
       );
-      if(e.rows[0]) await audit(client,p.tenantId,p.userId,"USAGE_RECORDED",body.moduleKey,{quantity:body.quantity});
-      return reply.code(e.rows[0]?201:200).send({recorded:!!e.rows[0],duplicate:!e.rows[0],billed:false});
+      if (!e.rows[0]) {
+        // An idempotency key refers to exactly one semantic operation. A replay
+        // with changed quantity/module is NOT an acceptable duplicate receipt.
+        // PostgreSQL unique index serializes concurrent inserts by key.
+        const previous=await client.query<{module_key:string;quantity:number;recorded_by:string}>(
+          "SELECT module_key,quantity,recorded_by FROM ocean_usage_events WHERE tenant_id=$1 AND idempotency_key=$2",
+          [p.tenantId,body.idempotencyKey],
+        );
+        const value=previous.rows[0];
+        if (!value || value.module_key!==body.moduleKey || value.quantity!==body.quantity || value.recorded_by!==p.userId) {
+          return reply.code(409).send({error:"Idempotency key already used for a different operation"});
+        }
+        return reply.code(200).send({recorded:false,duplicate:true,billed:false});
+      }
+      await audit(client,p.tenantId,p.userId,"USAGE_RECORDED",body.moduleKey,{quantity:body.quantity});
+      return reply.code(201).send({recorded:true,duplicate:false,billed:false});
     });
   });
   app.get("/v1/usage", async request => {
