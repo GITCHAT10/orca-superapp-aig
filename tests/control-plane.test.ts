@@ -42,6 +42,37 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     const bHeaders={"x-ocean-tenant":b.slug,Authorization:"Bearer "+bLogin.body.accessToken};
     assert.equal((await call("GET","/v1/me",undefined,aHeaders)).body.tenantId,aCreated.body.tenantId);
     assert.equal((await call("GET","/v1/me",undefined,bHeaders)).body.tenantId,bCreated.body.tenantId);
+    // UAT-only onboarding: invitation secrets must be single-use and tied
+    // to the correct tenant and exact invited email.
+    process.env.OCEAN_INVITATIONS_UAT_ENABLED="true";
+    const invitedEmail="member-"+suffix+"@example.test";
+    const newMemberPassword="ExampleOnlyMemberPassword!234";
+    const invite=await call("POST","/v1/tenants/invitations",{email:invitedEmail,role:"MEMBER"},aHeaders);
+    assert.equal(invite.status,201,JSON.stringify(invite.body));
+    assert.equal(invite.body.delivery,"NOT_SENT_UAT_ONLY");
+    const inviteData={tenantSlug:a.slug,email:invitedEmail,inviteToken:invite.body.inviteToken,password:newMemberPassword};
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",{...inviteData,tenantSlug:b.slug})).status,400);
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",{...inviteData,email:"wrong-"+suffix+"@example.test"})).status,400);
+    const acceptedInvite=await call("POST","/v1/tenants/invitations/accept",inviteData);
+    assert.equal(acceptedInvite.status,201,JSON.stringify(acceptedInvite.body));
+    assert.equal(acceptedInvite.body.role,"MEMBER");
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",inviteData)).status,400,"Invite must be single-use");
+    const memberLogin=await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:invitedEmail,password:newMemberPassword});
+    assert.equal(memberLogin.status,200);
+    const memberHeaders={"x-ocean-tenant":a.slug,Authorization:"Bearer "+memberLogin.body.accessToken};
+    assert.equal((await call("GET","/v1/me",undefined,memberHeaders)).body.role,"MEMBER");
+    assert.equal((await call("POST","/v1/tenants/invitations",{email:"nope-"+suffix+"@example.test",role:"ADMIN"},memberHeaders)).status,403);
+    const inviteUnscoped=await pool.query("SELECT count(*)::int AS n FROM ocean_invitations");
+    assert.equal(inviteUnscoped.rows[0].n,0,"Invite records require RLS tenant context");
+    const inviteCrossTenant=await withTenant(pool,bCreated.body.tenantId,async client=>
+      client.query<{n:number}>("SELECT count(*)::int AS n FROM ocean_invitations WHERE tenant_id=$1",[aCreated.body.tenantId]));
+    assert.equal(inviteCrossTenant.rows[0].n,0);
+    const originalEnv=process.env.NODE_ENV;
+    process.env.NODE_ENV="production";
+    assert.equal((await call("POST","/v1/tenants/invitations",{email:"disabled-"+suffix+"@example.test",role:"MEMBER"},aHeaders)).status,423);
+    assert.equal((await call("POST","/v1/tenants/invitations/accept",inviteData)).status,423);
+    process.env.NODE_ENV=originalEnv;
+
     assert.equal((await call("GET","/v1/me",undefined,{"x-ocean-tenant":b.slug,Authorization:aHeaders.Authorization})).status,401);
     assert.equal((await call("POST","/v1/auth/login",{tenantSlug:b.slug,email:a.email,password:a.password})).status,401);
     assert.equal((await call("GET","/v1/me",undefined,{"x-ocean-tenant":a.slug})).status,401);
