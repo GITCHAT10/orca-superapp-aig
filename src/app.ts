@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword, newSessionToken, tokenDigest } from "./pa
 import { registerExtendedRoutes } from "./extended.js";
 import { registerOceanStorageRoutes } from "./storage.js";
 import { inspectOceanReadiness } from "./readiness.js";
+import { registerOceanInvitationRoutes } from "./invitations.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -46,7 +47,7 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     app.log.error(error);
     return void reply.code(500).send({ error: "Internal server error" });
   });
-  const publicPaths = new Set(["/healthz", "/readyz", "/v1/tenants/register", "/v1/auth/login"]);
+  const publicPaths = new Set(["/healthz", "/readyz", "/v1/tenants/register", "/v1/auth/login", "/v1/tenants/invitations/accept"]);
   app.addHook("onRequest", async (request, reply) => {
     if (publicPaths.has(request.url.split("?")[0]!)) return;
     const slug = request.headers["x-ocean-tenant"];
@@ -271,6 +272,7 @@ export function createOceanApp(pool: Pool): FastifyInstance {
       return {events:result.rows};
     });
   });
+  void registerOceanInvitationRoutes(app,pool);
   void registerExtendedRoutes(app,pool);
   void registerOceanStorageRoutes(app,pool);
   return app;
