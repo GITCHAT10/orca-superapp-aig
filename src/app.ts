@@ -6,6 +6,7 @@ import { withTenant } from "./db.js";
 import { hashPassword, verifyPassword, newSessionToken, tokenDigest } from "./password.js";
 import { registerExtendedRoutes } from "./extended.js";
 import { registerOceanStorageRoutes } from "./storage.js";
+import { inspectOceanReadiness } from "./readiness.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -75,8 +76,12 @@ export function createOceanApp(pool: Pool): FastifyInstance {
   }
   app.get("/healthz", async () => ({ status: "ok", service: "ocean-cloud-control-plane" }));
   app.get("/readyz", async (_req, reply) => {
-    try { await pool.query("SELECT 1"); return { status: "ready" }; }
-    catch { return reply.code(503).send({ status: "database_unavailable" }); }
+    const readiness=await inspectOceanReadiness(pool);
+    if (!readiness.ready) return reply.code(503).send({
+      status:"not_ready",
+      failedChecks:readiness.missing,
+    });
+    return { status:"ready", checksPassed:Object.keys(readiness.checks).length };
   });
   app.post("/v1/tenants/register", async (request, reply) => {
     if (process.env.OCEAN_SIGNUP_ENABLED !== "true" || process.env.NODE_ENV === "production") {
