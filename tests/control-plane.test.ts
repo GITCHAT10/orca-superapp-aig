@@ -62,6 +62,10 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     const duplicate=await call("POST","/v1/usage",usage,aHeaders);
     assert.equal(first.status,201,JSON.stringify(first.body));
     assert.deepEqual(duplicate.body,{recorded:false,duplicate:true,billed:false});
+    const conflictingQuantity=await call("POST","/v1/usage",{...usage,quantity:19},aHeaders);
+    assert.equal(conflictingQuantity.status,409,"Replaying the same key with changed usage must fail closed");
+    const conflictingModule=await call("POST","/v1/usage",{...usage,moduleKey:"AIG_WORK"},aHeaders);
+    assert.equal(conflictingModule.status,409,"Replaying the same key against another module must fail closed");
     assert.equal((await call("POST","/v1/usage",usage,bHeaders)).status,403);
     const aAudit=await call("GET","/v1/audit",undefined,aHeaders);
     const bAudit=await call("GET","/v1/audit",undefined,bHeaders);
@@ -72,6 +76,29 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(rlsA.rows[0].n,0);
     const unscoped=await pool.query("SELECT COUNT(*)::int AS n FROM ocean_audit_events");
     assert.equal(unscoped.rows[0].n,0,"RLS must fail closed without tenant context");
+    // Direct database tests: PostgreSQL RLS, not just HTTP filtering, must
+    // protect every tenant-owned table. Query B's records while scoped to A.
+    const protectedTables=[
+      "ocean_memberships","ocean_sessions","ocean_entitlements",
+      "ocean_subscriptions","ocean_usage_events","ocean_audit_events",
+      "ocean_approval_requests","ocean_agent_registry","ocean_event_outbox",
+      "ocean_product_adapters","ocean_objects","ocean_model_routes",
+      "ocean_auth_failures",
+    ] as const;
+    for (const table of protectedTables) {
+      const seen=await withTenant(pool,aCreated.body.tenantId,async client=>
+        client.query<{n:number}>(
+          `SELECT COUNT(*)::int AS n FROM ${table} WHERE tenant_id=$1`,
+          [bCreated.body.tenantId],
+        ));
+      assert.equal(seen.rows[0]?.n,0,`Cross-tenant row escaped RLS: ${table}`);
+    }
+    const wrongTenantWrite=await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query(
+        "INSERT INTO ocean_auth_failures(tenant_id,email,failed_attempts) VALUES($1,$2,$3)",
+        [bCreated.body.tenantId,"forbidden-cross-tenant@example.test",1],
+      ).then(()=>false,()=>true));
+    assert.equal(wrongTenantWrite,true,"RLS WITH CHECK must reject unauthorized tenant writes");
     // P1/P2: maker-checker approvals, durable outbox and isolated agent registry.
     const request=await call("POST","/v1/workflows/approvals",{actionKey:"CONNECT_PRODUCT",resourceKey:"PRESTIGE_HOLIDAYS_OS"},aHeaders);
     assert.equal(request.status,201,JSON.stringify(request.body));
