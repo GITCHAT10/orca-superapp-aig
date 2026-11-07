@@ -7,6 +7,7 @@ import { hashPassword } from "../src/password.js";
 
 test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activation, usage and audit", async () => {
   process.env.OCEAN_SIGNUP_ENABLED="true";
+  process.env.OCEAN_STORAGE_KEY_HEX="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   process.env.NODE_ENV="test";
   const pool=appPool();
   const app=createOceanApp(pool);
@@ -93,6 +94,21 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(adapter.status,201);
     assert.equal(adapter.body.status,"DISCONNECTED");
     assert.equal((await call("GET","/v1/product-contracts",undefined,aHeaders)).body.privateBrainCoralAccess,false);
+    const secretBuffer=Buffer.from("Synthetic tenant A confidential test object");
+    const stored=await call("POST","/v1/objects",{objectName:"test.txt",base64Content:secretBuffer.toString("base64")},aHeaders);
+    assert.equal(stored.status,201,JSON.stringify(stored.body));
+    assert.equal(stored.body.encrypted,true);
+    const loaded=await call("GET","/v1/objects/"+stored.body.id,undefined,aHeaders);
+    assert.equal(loaded.status,200);
+    assert.equal(Buffer.from(loaded.body.base64Content,"base64").toString(),secretBuffer.toString());
+    assert.equal((await call("GET","/v1/objects/"+stored.body.id,undefined,bHeaders)).status,404);
+    const raw=await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query<{ciphertext:Buffer}>("SELECT ciphertext FROM ocean_objects WHERE id=$1",[stored.body.id]));
+    assert.notEqual(raw.rows[0]!.ciphertext.toString(),secretBuffer.toString());
+    const route=await call("PUT","/v1/agents/ocean-advisor/model-route",{provider:"OPENAI",modelId:"test-model-no-execution"},aHeaders);
+    assert.equal(route.status,200,JSON.stringify(route.body));
+    assert.equal(route.body.enabled,false);
+    assert.equal((await call("GET","/v1/agents/model-routes",undefined,bHeaders)).body.routes.length,0);
     const logout=await call("POST","/v1/auth/logout",{},aHeaders);
     assert.equal(logout.status,200);
     assert.equal((await call("GET","/v1/me",undefined,aHeaders)).status,401);
