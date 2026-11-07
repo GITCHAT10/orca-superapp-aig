@@ -55,6 +55,27 @@ export async function registerOceanInvitationRoutes(app:FastifyInstance,pool:Poo
     });
   });
 
+  app.post("/v1/tenants/invitations/:id/revoke",async(request,reply)=>{
+    if(!onboardingAllowed())return reply.code(423).send({error:"Invitation onboarding disabled"});
+    const principal=request.oceanPrincipal!;
+    if(principal.role!=="OWNER"&&principal.role!=="ADMIN"){
+      return reply.code(403).send({error:"Tenant administrator required"});
+    }
+    const {id}=z.object({id:z.uuid()}).parse(request.params);
+    return withTenant(pool,principal.tenantId,async client=>{
+      const updated=await client.query<{id:string}>(
+        "UPDATE ocean_invitations SET revoked_at=now() WHERE id=$1 AND tenant_id=$2 AND accepted_at IS NULL AND revoked_at IS NULL RETURNING id",
+        [id,principal.tenantId],
+      );
+      if(!updated.rows[0])return reply.code(409).send({error:"Invitation cannot be revoked"});
+      await client.query(
+        "INSERT INTO ocean_audit_events(tenant_id,actor_id,action,resource) VALUES($1,$2,'INVITATION_REVOKED',$3)",
+        [principal.tenantId,principal.userId,id],
+      );
+      return {revoked:true,id};
+    });
+  });
+
   app.post("/v1/tenants/invitations/accept",async(request,reply)=>{
     if(!onboardingAllowed())return reply.code(423).send({error:"Invitation onboarding disabled"});
     const input=acceptanceSchema.parse(request.body);
