@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import { withTenant } from "./db.js";
 import { hashPassword, verifyPassword, newSessionToken, tokenDigest } from "./password.js";
+import { registerExtendedRoutes } from "./extended.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -218,5 +219,6 @@ export function createOceanApp(pool: Pool): FastifyInstance {
       return {events:result.rows};
     });
   });
+  void registerExtendedRoutes(app,pool);
   return app;
 }
