@@ -56,3 +56,12 @@ Documentation and static marketplace content retained.
 The usage meter now enforces **semantic idempotency**: reusing an existing tenant/idempotency key with a changed module, quantity or recording actor returns HTTP 409, not a success-shaped duplicate. Real PostgreSQL integration tests verify an exact duplicate is acknowledged only once and conflicting replays fail. A direct SQL negative-test matrix also verifies that all thirteen FORCE-RLS tables reject a different tenant's reads and that cross-tenant writes fail the database policy.
 
 This is **internal UAT usage evidence, not an authoritative invoice or financial settlement**. Do not enable external billing until provider settlement, signed source metering, reconciliation, disputed-usage handling and finance approvals are tested. The current branch is not production-deployed.
+
+## Tenant invitation UAT flow — 7 November 2026
+
+- Migration `005_tenant_invitation.sql` adds PostgreSQL FORCE-RLS tenant-scoped invitations; 14 tenant-owned tables now require forced RLS in the readiness check.
+- `POST /v1/tenants/invitations`: authenticated OWNER/ADMIN; ordinary users cannot invite. ADMIN may invite MEMBER only. A 32-byte unpredictable token is returned exactly once in UAT; only a SHA-256 digest is stored. Expires after 24 hours.
+- `POST /v1/tenants/invitations/accept`: invitation redemption by the exact email, slug and unexpired token; transactional row lock makes redemption single-use. New users receive MEMBER or ADMIN membership only in the issuing tenant. Cross-tenant redemption and replay are rejected.
+- `POST /v1/tenants/invitations/:id/revoke`: authorized owner/admin can revoke an unused invitation, leaving evidence in the audit log.
+- All invitation routes **fail closed with HTTP 423 in NODE_ENV=production**; enabling UAT requires `OCEAN_INVITATIONS_UAT_ENABLED=true` in a nonproduction environment. No email is sent and the invite token must not be written to logs or external analytics.
+- This is a **synthetic invitation UAT**, not real customer onboarding: production needs verified-email delivery, account linking or SSO, MFA, rate limiting, revocation UX, support recovery, and privacy review. Existing user emails are intentionally refused until a governed multi-tenant account-linking mechanism exists.
