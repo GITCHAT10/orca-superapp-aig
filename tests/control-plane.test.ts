@@ -114,7 +114,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
       "ocean_subscriptions","ocean_usage_events","ocean_audit_events",
       "ocean_approval_requests","ocean_agent_registry","ocean_event_outbox",
       "ocean_product_adapters","ocean_objects","ocean_model_routes",
-      "ocean_auth_failures",
+      "ocean_auth_failures","ocean_invitations",
     ] as const;
     for (const table of protectedTables) {
       const seen=await withTenant(pool,aCreated.body.tenantId,async client=>
