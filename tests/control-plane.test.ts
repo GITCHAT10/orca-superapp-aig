@@ -100,6 +100,15 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(bOutbox.body.events.length,0);
     assert.equal((await call("POST","/v1/agents",{agentKey:"ocean-advisor",description:"Synthetic test advisory"},aHeaders)).status,201);
     assert.equal((await call("GET","/v1/agents",undefined,bHeaders)).body.agents.length,0);
+    const portfolio=await call("GET","/v1/product-contracts",undefined,aHeaders);
+    assert.equal(portfolio.status,200);
+    assert.equal(portfolio.body.contracts.length,11,"Every AIG vertical including MAILMAN and OCEAN CLOUD must be represented");
+    assert.equal(new Set(portfolio.body.contracts.map((x:{key:string})=>x.key)).size,11);
+    assert.ok(portfolio.body.contracts.some((x:{key:string,protocol:string})=>
+      x.key==="AIG_MAILMAN"&&x.protocol==="SIGNED_APPROVED_METADATA_ONLY"));
+    assert.ok(portfolio.body.contracts.every((x:{connected:boolean})=>x.connected===false));
+    assert.equal((await call("POST","/v1/product-contracts/OCEAN_CLOUD/register",{},aHeaders)).status,403);
+    assert.equal((await call("POST","/v1/product-contracts/NEXAMA_HEALTHCARE/register",{},aHeaders)).status,403);
     const adapter=await call("POST","/v1/product-contracts/PRESTIGE_HOLIDAYS_OS/register",{},aHeaders);
     assert.equal(adapter.status,201);
     assert.equal(adapter.body.status,"DISCONNECTED");
