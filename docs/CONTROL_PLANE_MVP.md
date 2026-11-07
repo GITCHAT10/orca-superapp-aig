@@ -13,6 +13,12 @@ This repository now includes an executable **Node 22 / Fastify / TypeScript / Po
 - `GET /v1/subscription` (TRIAL / PENDING_BILLING by default; no paid charge)
 - `POST /v1/usage` (idempotent usage evidence, NOT a payment)
 - `GET /v1/usage` and `GET /v1/audit`
+- `POST/GET /v1/workflows/approvals` and `POST /v1/workflows/approvals/:id/decision` (two distinct authorized staff actors; no external execution)
+- `GET/POST /v1/agents`; `PUT /v1/agents/:key/model-route` (catalog only, all disabled)
+- `GET /v1/agents/model-routes`, `GET /v1/product-contracts` and `POST /v1/product-contracts/:key/register` (disconnected adapter registry)
+- `GET /v1/outbox` (persisted delivery proposals; no dispatch worker)
+- `POST /v1/objects`, `GET /v1/objects/:id` (AES-256-GCM encrypted small objects, 48 KiB max, tenant/object-bound AAD)
+
 
 ## Real isolation properties
 
@@ -30,7 +36,7 @@ Never treat OCEAN CLOUD as a privileged BRAIN CORAL client. No private MIG data,
 
 ## What is NOT implemented
 
-No BRAIN CORAL private access, actual vertical provisioning, AI orchestration, external payment provider, outbound mail, subscription invoicing, file/object storage, password reset, MFA, rate limits at edge, enterprise SSO, qualified security audit, operational incident monitoring or production deployment. Module activation writes a database entitlement and audit entry but explicitly returns `provisioned:false`. Do not advertise complete product availability.
+No BRAIN CORAL private access, actual vertical provisioning, live AI model calls, external payment provider, outbound mail, subscription invoicing, S3/object replica storage, password reset, MFA, rate limits at edge, enterprise SSO, qualified security audit, operational incident monitoring or production deployment. The initial small-object implementation uses PostgreSQL-backed ciphertext, not the planned external S3 adapter; configure OCEAN_STORAGE_KEY_HEX via a secure secret manager and rotate keys with a reviewed plan. Module activation writes a database entitlement and audit entry but explicitly returns `provisioned:false`. Do not advertise complete product availability.
 
 ## Required release gates
 
