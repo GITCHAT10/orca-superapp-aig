@@ -15,6 +15,7 @@ export const PRODUCT_CONTRACTS = Object.freeze([
   {key:"PRESTIGE_HOLIDAYS_OS",owner:"PRESTIGE DMC",protocol:"VERSIONED_HTTPS_API"},
   {key:"SKYFARM_OS",owner:"SKYFARM",protocol:"VERSIONED_HTTPS_API"},
   {key:"AIG_MAILMAN",owner:"MAILMAN",protocol:"SIGNED_APPROVED_METADATA_ONLY"},
+  {key:"OCEAN_CLOUD",owner:"OCEAN CLOUD (self)",protocol:"NO_PRIVATE_BRAIN_CORAL_CONNECTION"},
   {key:"DEEP",owner:"DEEP STORAGE (not deployed)",protocol:"FUTURE_ENCRYPTED_OBJECT_STORAGE"},
 ]);
 
@@ -122,6 +123,7 @@ export async function registerExtendedRoutes(app:FastifyInstance,pool:Pool){
     if(!isAdmin(p.role))return reply.code(403).send({error:"Admin role required"});
     const {key}=z.object({key:z.string().min(2).max(64)}).parse(request.params);
     if(!PRODUCT_CONTRACTS.some(c=>c.key===key))return reply.code(404).send({error:"Unknown product contract"});
+    if(key==="OCEAN_CLOUD"||key==="NEXAMA_HEALTHCARE")return reply.code(403).send({error:"Restricted product contract cannot be registered by a customer"});
     return withTenant(pool,p.tenantId,async client=>{
       await client.query(
         "INSERT INTO ocean_product_adapters(tenant_id,adapter_key,created_by) VALUES($1,$2,$3) ON CONFLICT(tenant_id,adapter_key) DO NOTHING",
