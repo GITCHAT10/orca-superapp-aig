@@ -50,3 +50,9 @@ Documentation and static marketplace content retained.
 - Failed credential attempts against an existing tenant account are tracked in `ocean_auth_failures` with PostgreSQL FORCE RLS; after five consecutive failures, the login endpoint fails closed for 15 minutes. A valid login clears this history. Tests exercise the lockout and show a second tenant remains available. This is not a replacement for network/IP-based distributed rate limits and MFA.
 - The dependency lockfile is committed in `package-lock.json`; CI now uses `npm ci` and verifies `npm audit --audit-level=high` before build and PostgreSQL integration tests. The temporary one-time workflow used to generate the lockfile has been deleted, removing its write-capability entry point.
 - Password account recovery, verified email ownership/invitation flow, enterprise MFA/SSO, central identity lifecycle, immutable external audit, tested key rotation and verified production deployment remain blocked.
+
+## Latest integrity gate — November 7, 2026
+
+The usage meter now enforces **semantic idempotency**: reusing an existing tenant/idempotency key with a changed module, quantity or recording actor returns HTTP 409, not a success-shaped duplicate. Real PostgreSQL integration tests verify an exact duplicate is acknowledged only once and conflicting replays fail. A direct SQL negative-test matrix also verifies that all thirteen FORCE-RLS tables reject a different tenant's reads and that cross-tenant writes fail the database policy.
+
+This is **internal UAT usage evidence, not an authoritative invoice or financial settlement**. Do not enable external billing until provider settlement, signed source metering, reconciliation, disputed-usage handling and finance approvals are tested. The current branch is not production-deployed.
