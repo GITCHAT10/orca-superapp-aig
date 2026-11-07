@@ -49,9 +49,9 @@ export async function inspectOceanReadiness(pool: Pool): Promise<ReadinessAssess
       "ocean_subscriptions","ocean_usage_events","ocean_audit_events",
       "ocean_approval_requests","ocean_agent_registry","ocean_event_outbox",
       "ocean_product_adapters","ocean_objects","ocean_model_routes",
-      "ocean_auth_failures",
+      "ocean_auth_failures","ocean_invitations",
     ]]);
-    checks.forcedTenantRls=Number(rls.rows[0]?.count)===13;
+    checks.forcedTenantRls=Number(rls.rows[0]?.count)===14;
   }catch{
     checks.databaseReachable=false;
   }
