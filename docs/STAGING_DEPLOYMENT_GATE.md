@@ -12,7 +12,7 @@ This staging image is isolated from the private MIG BRAIN CORAL network and stor
 4. Configure `OCEAN_DATABASE_URL` and `OCEAN_STORAGE_KEY_HEX` (fresh 32-byte hex key from a secure generator) for the runtime. `OCEAN_MIGRATION_DATABASE_URL` is **migration job only**, never present in runtime.
 5. Set `NODE_ENV=production`, `OCEAN_SIGNUP_ENABLED=false` to block self-registration. There is no approved external customer onboarding yet; that is intentional.
 6. Apply versioned SQL 001–004 through a controlled migrator under the migration owner before starting the app. Verify transactional backups, schema role ownership and restoration procedures.
-7. Use `Dockerfile` to build the isolated runtime image. Expose only HTTPS through a managed reverse proxy, keep direct container port private, and use `/readyz` as the readiness gate. Readiness requires an available DB, restricted runtime role, all 14 tenant tables with FORCE RLS, a storage key, and registration closed in production.
+7. Use `Dockerfile` to build the isolated runtime image. Expose only HTTPS through a managed reverse proxy, keep direct container port private, and use `/readyz` as the readiness gate. Readiness requires an available DB, restricted runtime role, all 15 tenant tables with FORCE RLS, separate object-storage and TOTP encryption keys, and registration closed in production.
 8. Test separate tenant sessions with synthetic data only; do not connect external billing, mail delivery, live AI, or AIG business backends.
 9. Record CI SHA, RLS test evidence, approval, rollback plan, and change window before any deployment.
 
@@ -32,3 +32,7 @@ Keep prior immutable image digest, take a verified pre-deploy encrypted DB snaps
 ## Invitation gate
 
 Self-registration remains disabled in production and the new `/v1/tenants/invitations` workflow is disabled in production as well. Staging UAT may explicitly enable it with synthetic users; invitation secrets are returned only once and never sent to a live mailbox. Do not onboard real customers before a verified-email/SSO identity bridge, MFA and approved delivery integration exist.
+
+## TOTP/MFA release gate
+
+MFA is implemented as an RFC 6238 30-second TOTP second factor. Only nonproduction sessions with `OCEAN_MFA_UAT_ENABLED=true` may enroll, after re-verifying the account password; a second TOTP code confirms activation and previously used steps are not accepted. All enrolled accounts must supply a valid, unused OTP at login. In production mode, every password login without an enrolled second factor fails closed. Configure `OCEAN_MFA_KEY_HEX` as a **distinct**, securely generated 32-byte key in a secrets manager—never as source control data. Do not deploy for real customer access without a verified production enrollment/SSO/bootstrap path, recovery operations, operational abuse controls and key-rotation procedures. Password-only legacy accounts cannot sign in under production policy.
