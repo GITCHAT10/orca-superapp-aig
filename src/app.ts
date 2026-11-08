@@ -11,6 +11,7 @@ import { registerOceanInvitationRoutes } from "./invitations.js";
 import { registerMfaRoutes } from "./mfaRoutes.js";
 import { findTotpStep, unsealMfaSecret } from "./mfa.js";
 import { registerAuthThrottle } from "./authThrottle.js";
+import { registerStagingControlPlaneRoutes } from "./staging/stagingControlPlane.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -100,6 +101,8 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     }
     request.oceanPrincipal = { tenantId, userId: session.user_id, role: session.role, sessionId: session.id };
   });
+  // Register protected staging endpoints only after the authenticated onRequest hook.
+  registerStagingControlPlaneRoutes(app);
   function requireAdmin(request: FastifyRequest) {
     return request.oceanPrincipal?.role === "OWNER" || request.oceanPrincipal?.role === "ADMIN";
   }
