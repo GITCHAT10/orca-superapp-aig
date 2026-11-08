@@ -33,6 +33,13 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(unsafeReadiness.status,503);
     assert.ok(unsafeReadiness.body.failedChecks.includes("storageKeyConfigured"));
     process.env.OCEAN_STORAGE_KEY_HEX=priorKey;
+    const rateKey=process.env.OCEAN_RATE_LIMIT_KEY_HEX;
+    delete process.env.OCEAN_RATE_LIMIT_KEY_HEX;
+    const blockedWithoutKey=await call("POST","/v1/auth/login",{
+      tenantSlug:"synthetic-example",email:"example@example.test",password:"synthetic",
+    });
+    assert.equal(blockedWithoutKey.status,503);
+    process.env.OCEAN_RATE_LIMIT_KEY_HEX=rateKey;
     const aCreated=await call("POST","/v1/tenants/register",a);
     const bCreated=await call("POST","/v1/tenants/register",b);
     assert.equal(aCreated.status,201,JSON.stringify(aCreated.body));
