@@ -86,13 +86,16 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     const tenantId = tenant.rows[0]?.id;
     if (!tenantId) return reply.code(401).send({ error: "Invalid session" });
     const session = await withTenant(pool, tenantId, async client => {
-      const result = await client.query<{ id: string; user_id: string; role: MemberRole }>(
-        "SELECT s.id,s.user_id,m.role FROM ocean_sessions s JOIN ocean_memberships m ON m.user_id=s.user_id AND m.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND s.token_hash=$2 AND s.revoked_at IS NULL AND s.expires_at>now()",
+      const result = await client.query<{ id: string; user_id: string; role: MemberRole; mfa_verified: boolean }>(
+        "SELECT s.id,s.user_id,m.role,s.mfa_verified FROM ocean_sessions s JOIN ocean_memberships m ON m.user_id=s.user_id AND m.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND s.token_hash=$2 AND s.revoked_at IS NULL AND s.expires_at>now()",
         [tenantId, tokenDigest(token)],
       );
       return result.rows[0];
     });
-    if (!session) return reply.code(401).send({ error: "Invalid session" });
+    if (!session || ((process.env.NODE_ENV==="production" ||
+        process.env.OCEAN_MFA_REQUIRED==="true") && !session.mfa_verified)) {
+      return reply.code(401).send({ error: "Invalid session" });
+    }
     request.oceanPrincipal = { tenantId, userId: session.user_id, role: session.role, sessionId: session.id };
   });
   function requireAdmin(request: FastifyRequest) {
@@ -173,6 +176,7 @@ export function createOceanApp(pool: Pool): FastifyInstance {
         [identity.tenant_id,identity.user_id],
       );
       const credential=mfa.rows[0];
+      let secondFactorVerified=false;
       if(credential?.enabled){
         if(!credential.secret_ciphertext || !credential.secret_nonce ||
            !credential.secret_tag || !body.otp)return false;
@@ -187,6 +191,7 @@ export function createOceanApp(pool: Pool): FastifyInstance {
           "UPDATE ocean_mfa_credentials SET last_used_step=$1,updated_at=now() WHERE tenant_id=$2 AND user_id=$3",
           [step,identity.tenant_id,identity.user_id],
         );
+        secondFactorVerified=true;
       } else if(process.env.NODE_ENV==="production" ||
                 process.env.OCEAN_MFA_REQUIRED==="true"){
         // Production accounts never receive a password-only session.
@@ -194,8 +199,8 @@ export function createOceanApp(pool: Pool): FastifyInstance {
       }
       await client.query("DELETE FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2", [identity.tenant_id, body.email]);
       await client.query(
-        "INSERT INTO ocean_sessions(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')",
-        [identity.tenant_id,identity.user_id,tokenDigest(token)],
+        "INSERT INTO ocean_sessions(tenant_id,user_id,token_hash,expires_at,mfa_verified) VALUES($1,$2,$3,now()+interval '1 hour',$4)",
+        [identity.tenant_id,identity.user_id,tokenDigest(token),secondFactorVerified],
       );
       await audit(client, identity.tenant_id, identity.user_id, "LOGIN", "SESSION");
       return true;
