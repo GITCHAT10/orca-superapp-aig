@@ -10,6 +10,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
   process.env.OCEAN_SIGNUP_ENABLED="true";
   process.env.OCEAN_STORAGE_KEY_HEX="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   process.env.OCEAN_MFA_KEY_HEX="abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+  process.env.OCEAN_RATE_LIMIT_KEY_HEX="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
   process.env.OCEAN_MFA_UAT_ENABLED="true";
   process.env.NODE_ENV="test";
   const pool=appPool();
@@ -25,7 +26,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     // Readiness must inspect actual PostgreSQL FORCE RLS and a non-owner runtime.
     const readiness=await call("GET","/readyz");
     assert.equal(readiness.status,200,JSON.stringify(readiness.body));
-    assert.equal(readiness.body.checksPassed,6);
+    assert.equal(readiness.body.checksPassed,8);
     const priorKey=process.env.OCEAN_STORAGE_KEY_HEX;
     delete process.env.OCEAN_STORAGE_KEY_HEX;
     const unsafeReadiness=await call("GET","/readyz");
