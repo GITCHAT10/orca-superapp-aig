@@ -71,6 +71,13 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     const confirmed=await call("POST","/v1/auth/mfa/confirm",{otp:confirmOtp},aHeaders);
     assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));
     assert.equal(confirmed.body.enabled,true);
+    const assurance=await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query<{mfa_verified:boolean}>(
+        "SELECT mfa_verified FROM ocean_sessions WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL",
+        [aCreated.body.tenantId,aCreated.body.ownerId],
+      ));
+    assert.ok(assurance.rows.every(row=>row.mfa_verified===true),
+      "Enrollment current session must be MFA-assured");
     assert.equal((await call("GET","/v1/auth/mfa",undefined,aHeaders)).body.enabled,true);
     assert.equal((await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:a.email,password:a.password})).status,401);
     const nextOtp=totpForStep(secret,step+1);
@@ -87,6 +94,10 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     assert.equal(bSecondLogin.status,200,"A's MFA cannot require a factor for B in test mode");
     const originalMfaNodeEnv=process.env.NODE_ENV;
     process.env.NODE_ENV="production";
+    assert.equal((await call("GET","/v1/me",undefined,aHeaders)).status,200,
+      "MFA-verified session may continue under production requirement");
+    assert.equal((await call("GET","/v1/me",undefined,bHeaders)).status,401,
+      "Legacy password-only session must be rejected in production");
     assert.equal((await call("POST","/v1/auth/mfa/enroll",{password:a.password},aHeaders)).status,423);
     assert.equal((await call("POST","/v1/auth/login",{
       tenantSlug:b.slug,email:b.email,password:b.password,
