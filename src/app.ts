@@ -8,6 +8,8 @@ import { registerExtendedRoutes } from "./extended.js";
 import { registerOceanStorageRoutes } from "./storage.js";
 import { inspectOceanReadiness } from "./readiness.js";
 import { registerOceanInvitationRoutes } from "./invitations.js";
+import { registerMfaRoutes } from "./mfaRoutes.js";
+import { findTotpStep, unsealMfaSecret } from "./mfa.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -24,6 +26,7 @@ const loginSchema = z.object({
   tenantSlug: z.string().min(3).max(63),
   email: z.email().transform(s => s.toLowerCase()),
   password: z.string().min(1),
+  otp: z.string().max(12).optional(),
 }).strict();
 const activateSchema = z.object({ enabled: z.boolean() }).strict();
 const usageSchema = z.object({
@@ -38,6 +41,26 @@ async function audit(client: AuditWriter, tenantId: string, actorId: string, act
     [tenantId, actorId, action, resource, JSON.stringify(detail)],
   );
 }
+
+/** Persistent shared failure policy for password and second-factor denials. */
+async function recordLoginFailure(pool:Pool,tenantId:string,email:string){
+  await withTenant(pool,tenantId,async client=>{
+    await client.query(
+      `INSERT INTO ocean_auth_failures(tenant_id,email,failed_attempts,blocked_until)
+       VALUES($1,$2,1,NULL)
+       ON CONFLICT(tenant_id,email) DO UPDATE SET
+         failed_attempts = CASE WHEN ocean_auth_failures.blocked_until <= now() THEN 1
+                                ELSE least(ocean_auth_failures.failed_attempts+1,20) END,
+         blocked_until = CASE WHEN ocean_auth_failures.blocked_until > now() THEN ocean_auth_failures.blocked_until
+                              WHEN ocean_auth_failures.blocked_until <= now() THEN NULL
+                              WHEN ocean_auth_failures.failed_attempts+1 >= 5 THEN now()+interval '15 minutes'
+                              ELSE NULL END,
+         updated_at=now()`,
+      [tenantId,email],
+    );
+  });
+}
+
 export function createOceanApp(pool: Pool): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 128 * 1024, trustProxy: false });
   app.setErrorHandler((error, _request, reply) => {
@@ -134,27 +157,41 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     });
     if (locked) return reply.code(429).header("Retry-After", "900").send({ error: "Login temporarily unavailable" });
     if (!(await verifyPassword(body.password, identity.password_salt, identity.password_hash))) {
-      await withTenant(pool, identity.tenant_id, async client => {
-        await client.query(
-          `INSERT INTO ocean_auth_failures(tenant_id,email,failed_attempts,blocked_until)
-           VALUES($1,$2,1,NULL)
-           ON CONFLICT(tenant_id,email) DO UPDATE SET
-             failed_attempts = CASE WHEN ocean_auth_failures.blocked_until <= now() THEN 1
-                                    ELSE least(ocean_auth_failures.failed_attempts+1,20) END,
-             blocked_until = CASE WHEN ocean_auth_failures.blocked_until > now() THEN ocean_auth_failures.blocked_until
-                                  WHEN ocean_auth_failures.blocked_until <= now() THEN NULL
-                                  WHEN ocean_auth_failures.failed_attempts+1 >= 5 THEN now()+interval '15 minutes'
-                                  ELSE NULL END,
-             updated_at=now()`,
-          [identity.tenant_id, body.email],
-        );
-      });
-      return reply.code(401).send({ error: "Invalid credentials" });
+      await recordLoginFailure(pool,identity.tenant_id,body.email);
+      return reply.code(401).send({error:"Invalid credentials"});
     }
     const token = newSessionToken();
     const authorized = await withTenant(pool, identity.tenant_id, async client => {
       const member = await client.query<{role:MemberRole}>("SELECT role FROM ocean_memberships WHERE tenant_id=$1 AND user_id=$2", [identity.tenant_id,identity.user_id]);
       if (!member.rows[0]) return false;
+      const mfa=await client.query<{
+        enabled:boolean;secret_ciphertext:Buffer|null;secret_nonce:Buffer|null;
+        secret_tag:Buffer|null;last_used_step:string;
+      }>(
+        `SELECT enabled,secret_ciphertext,secret_nonce,secret_tag,last_used_step
+           FROM ocean_mfa_credentials WHERE tenant_id=$1 AND user_id=$2 FOR UPDATE`,
+        [identity.tenant_id,identity.user_id],
+      );
+      const credential=mfa.rows[0];
+      if(credential?.enabled){
+        if(!credential.secret_ciphertext || !credential.secret_nonce ||
+           !credential.secret_tag || !body.otp)return false;
+        const secret=unsealMfaSecret({
+          ciphertext:credential.secret_ciphertext,
+          nonce:credential.secret_nonce,tag:credential.secret_tag,
+        },identity.tenant_id,identity.user_id);
+        const step=findTotpStep(secret,body.otp,Number(credential.last_used_step));
+        if(step===null)return false;
+        // Monotonic step is locked in the same transaction as session issuance.
+        await client.query(
+          "UPDATE ocean_mfa_credentials SET last_used_step=$1,updated_at=now() WHERE tenant_id=$2 AND user_id=$3",
+          [step,identity.tenant_id,identity.user_id],
+        );
+      } else if(process.env.NODE_ENV==="production" ||
+                process.env.OCEAN_MFA_REQUIRED==="true"){
+        // Production accounts never receive a password-only session.
+        return false;
+      }
       await client.query("DELETE FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2", [identity.tenant_id, body.email]);
       await client.query(
         "INSERT INTO ocean_sessions(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')",
@@ -163,7 +200,10 @@ export function createOceanApp(pool: Pool): FastifyInstance {
       await audit(client, identity.tenant_id, identity.user_id, "LOGIN", "SESSION");
       return true;
     });
-    if (!authorized) return reply.code(401).send({ error: "Invalid credentials" });
+    if (!authorized) {
+      await recordLoginFailure(pool,identity.tenant_id,body.email);
+      return reply.code(401).send({error:"Invalid credentials"});
+    }
     return { accessToken: token, tokenType: "Bearer", expiresIn: 3600, tenantSlug: body.tenantSlug };
   });
   app.post("/v1/auth/logout", async request => {
@@ -273,6 +313,7 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     });
   });
   void registerOceanInvitationRoutes(app,pool);
+  void registerMfaRoutes(app,pool);
   void registerExtendedRoutes(app,pool);
   void registerOceanStorageRoutes(app,pool);
   return app;
