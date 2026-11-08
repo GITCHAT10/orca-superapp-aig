@@ -11,6 +11,7 @@ import { registerOceanInvitationRoutes } from "./invitations.js";
 import { registerMfaRoutes } from "./mfaRoutes.js";
 import { findTotpStep, unsealMfaSecret } from "./mfa.js";
 import { registerAuthThrottle } from "./authThrottle.js";
+import { registerStagingControlPlaneRoutes } from "./staging/stagingControlPlane.js";
 
 type MemberRole = "OWNER" | "ADMIN" | "MEMBER";
 type Principal = { tenantId: string; userId: string; role: MemberRole; sessionId: string };
@@ -65,6 +66,7 @@ async function recordLoginFailure(pool:Pool,tenantId:string,email:string){
 export function createOceanApp(pool: Pool): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 128 * 1024, trustProxy: false });
   registerAuthThrottle(app,pool);
+  registerStagingControlPlaneRoutes(app);
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return void reply.code(400).send({ error: "Invalid request", issues: error.issues });
     const code = (error as { code?: string }).code;
