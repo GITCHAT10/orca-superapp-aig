@@ -36,3 +36,7 @@ Self-registration remains disabled in production and the new `/v1/tenants/invita
 ## TOTP/MFA release gate
 
 MFA is implemented as an RFC 6238 30-second TOTP second factor. Only nonproduction sessions with `OCEAN_MFA_UAT_ENABLED=true` may enroll, after re-verifying the account password; a second TOTP code confirms activation and previously used steps are not accepted. All enrolled accounts must supply a valid, unused OTP at login. In production mode, every password login without an enrolled second factor fails closed. Configure `OCEAN_MFA_KEY_HEX` as a **distinct**, securely generated 32-byte key in a secrets manager—never as source control data. Do not deploy for real customer access without a verified production enrollment/SSO/bootstrap path, recovery operations, operational abuse controls and key-rotation procedures. Password-only legacy accounts cannot sign in under production policy.
+
+## Shared authentication rate limiter
+
+Configure a dedicated, generated `OCEAN_RATE_LIMIT_KEY_HEX` in the secret manager, identical across all replicas and distinct from encryption keys. Apply migration 008 and confirm the non-owner app role can update `ocean_request_limits`. The readiness endpoint now fails if the counter store or key is unavailable. Before public release, confirm correct client-IP attribution behind the ingress proxy and deploy ingress/WAF rate limiting; current in-app source quotas use the real TCP peer with `trustProxy:false`.
