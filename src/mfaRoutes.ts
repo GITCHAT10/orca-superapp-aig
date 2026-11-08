@@ -111,6 +111,10 @@ export async function registerMfaRoutes(app:FastifyInstance,pool:Pool) {
         [principal.tenantId,principal.userId,principal.sessionId],
       );
       await client.query(
+        "UPDATE ocean_sessions SET mfa_verified=true WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND revoked_at IS NULL",
+        [principal.tenantId,principal.userId,principal.sessionId],
+      );
+      await client.query(
         "INSERT INTO ocean_audit_events(tenant_id,actor_id,action,resource) VALUES($1,$2,'TOTP_ENABLED','SELF')",
         [principal.tenantId,principal.userId],
       );
