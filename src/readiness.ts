@@ -17,6 +17,8 @@ export async function inspectOceanReadiness(pool: Pool): Promise<ReadinessAssess
     forcedTenantRls: false,
     storageKeyConfigured: false,
     mfaKeyConfigured: false,
+    requestThrottleKeyConfigured: false,
+    requestThrottleStorePresent: false,
     registrationClosedInProduction: false,
   };
   try {
@@ -53,11 +55,19 @@ export async function inspectOceanReadiness(pool: Pool): Promise<ReadinessAssess
       "ocean_auth_failures","ocean_invitations","ocean_mfa_credentials",
     ]]);
     checks.forcedTenantRls=Number(rls.rows[0]?.count)===15;
+    const throttle=await pool.query<{exists:boolean}>(
+      "SELECT to_regclass('public.ocean_request_limits') IS NOT NULL AS exists",
+    );
+    checks.requestThrottleStorePresent=throttle.rows[0]?.exists===true;
   }catch{
     checks.databaseReachable=false;
   }
   checks.storageKeyConfigured=/^[0-9a-fA-F]{64}$/.test(process.env.OCEAN_STORAGE_KEY_HEX??"");
   checks.mfaKeyConfigured=/^[0-9a-fA-F]{64}$/.test(process.env.OCEAN_MFA_KEY_HEX??"");
+  checks.requestThrottleKeyConfigured=/^[0-9a-fA-F]{64}$/.test(
+    process.env.OCEAN_RATE_LIMIT_KEY_HEX??"",
+  ) && process.env.OCEAN_RATE_LIMIT_KEY_HEX!==process.env.OCEAN_MFA_KEY_HEX &&
+       process.env.OCEAN_RATE_LIMIT_KEY_HEX!==process.env.OCEAN_STORAGE_KEY_HEX;
   checks.registrationClosedInProduction=process.env.NODE_ENV!=="production"||
     process.env.OCEAN_SIGNUP_ENABLED!=="true";
   const missing=Object.entries(checks).filter(([,passed])=>!passed).map(([name])=>name);
