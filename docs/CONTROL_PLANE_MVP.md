@@ -65,3 +65,11 @@ This is **internal UAT usage evidence, not an authoritative invoice or financial
 - `POST /v1/tenants/invitations/:id/revoke`: authorized owner/admin can revoke an unused invitation, leaving evidence in the audit log.
 - All invitation routes **fail closed with HTTP 423 in NODE_ENV=production**; enabling UAT requires `OCEAN_INVITATIONS_UAT_ENABLED=true` in a nonproduction environment. No email is sent and the invite token must not be written to logs or external analytics.
 - This is a **synthetic invitation UAT**, not real customer onboarding: production needs verified-email delivery, account linking or SSO, MFA, rate limiting, revocation UX, support recovery, and privacy review. Existing user emails are intentionally refused until a governed multi-tenant account-linking mechanism exists.
+
+## TOTP MFA foundation — 8 November 2026
+
+- Migration `006_mfa_totp.sql` adds `ocean_mfa_credentials` with FORCE RLS. All **15** tenant-owned tables must pass the runtime RLS preflight.
+- `GET /v1/auth/mfa` reports enabled state for the signed-in member; `POST /v1/auth/mfa/enroll` and `POST /v1/auth/mfa/confirm` require a nonproduction UAT flag `OCEAN_MFA_UAT_ENABLED=true`.
+- Enrollment requires reauthentication with the user's password and returns an `otpauth://` provisioning URI only to the authenticated UAT requester, never via logs or external providers. Enrollment expires after 10 minutes. TOTP secrets use AES-256-GCM with tenant/user-bound associated data and a separate 32-byte `OCEAN_MFA_KEY_HEX` from a secret manager.
+- Confirmation consumes the submitted 30-second OTP and atomically records the accepted time-step, enables MFA, and revokes any other pre-MFA sessions. Future logins to the account require password **plus TOTP**; reused time-steps are denied and share the existing persistent account lockout policy.
+- In `NODE_ENV=production`, all password-only logins without enrolled MFA are denied and TOTP enrollment is disabled. This is **deliberately not a production enrollment implementation**: a verified initial enrollment or enterprise SSO flow, customer support recovery, key rotation, rate limiting and customer security review must precede release.
