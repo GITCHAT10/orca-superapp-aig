@@ -122,9 +122,16 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     const expiryEmail="expired-"+suffix+"@example.test";
     const expiredInvite=await call("POST","/v1/tenants/invitations",{email:expiryEmail,role:"MEMBER"},aHeaders);
     assert.equal(expiredInvite.status,201);
-    await withTenant(pool,aCreated.body.tenantId,async client=>
+    const expiredMutation=await withTenant(pool,aCreated.body.tenantId,async client=>
       client.query("UPDATE ocean_invitations SET expires_at=now()-interval '1 minute' WHERE id=$1 AND tenant_id=$2",
         [expiredInvite.body.invitationId,aCreated.body.tenantId]));
+    assert.equal(expiredMutation.rowCount,1,"Expected to expire exactly one invitation");
+    const expiryStatus=await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query<{expired:boolean}>(
+        "SELECT expires_at<now() AS expired FROM ocean_invitations WHERE id=$1 AND tenant_id=$2",
+        [expiredInvite.body.invitationId,aCreated.body.tenantId],
+      ));
+    assert.equal(expiryStatus.rows[0]?.expired,true,"Invitation expiry must persist in PostgreSQL");
     assert.equal((await call("POST","/v1/tenants/invitations/accept",{
       tenantSlug:a.slug,email:expiryEmail,inviteToken:expiredInvite.body.inviteToken,password:newMemberPassword,
     })).status,400,"Expired invitation must never work");
