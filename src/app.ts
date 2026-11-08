@@ -66,7 +66,6 @@ async function recordLoginFailure(pool:Pool,tenantId:string,email:string){
 export function createOceanApp(pool: Pool): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 128 * 1024, trustProxy: false });
   registerAuthThrottle(app,pool);
-  registerStagingControlPlaneRoutes(app);
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return void reply.code(400).send({ error: "Invalid request", issues: error.issues });
     const code = (error as { code?: string }).code;
@@ -102,6 +101,8 @@ export function createOceanApp(pool: Pool): FastifyInstance {
     }
     request.oceanPrincipal = { tenantId, userId: session.user_id, role: session.role, sessionId: session.id };
   });
+  // Register protected staging endpoints only after the authenticated onRequest hook.
+  registerStagingControlPlaneRoutes(app);
   function requireAdmin(request: FastifyRequest) {
     return request.oceanPrincipal?.role === "OWNER" || request.oceanPrincipal?.role === "ADMIN";
   }
