@@ -16,6 +16,7 @@ export async function inspectOceanReadiness(pool: Pool): Promise<ReadinessAssess
     nonPrivilegedRuntime: false,
     forcedTenantRls: false,
     storageKeyConfigured: false,
+    mfaKeyConfigured: false,
     registrationClosedInProduction: false,
   };
   try {
@@ -49,13 +50,14 @@ export async function inspectOceanReadiness(pool: Pool): Promise<ReadinessAssess
       "ocean_subscriptions","ocean_usage_events","ocean_audit_events",
       "ocean_approval_requests","ocean_agent_registry","ocean_event_outbox",
       "ocean_product_adapters","ocean_objects","ocean_model_routes",
-      "ocean_auth_failures","ocean_invitations",
+      "ocean_auth_failures","ocean_invitations","ocean_mfa_credentials",
     ]]);
-    checks.forcedTenantRls=Number(rls.rows[0]?.count)===14;
+    checks.forcedTenantRls=Number(rls.rows[0]?.count)===15;
   }catch{
     checks.databaseReachable=false;
   }
   checks.storageKeyConfigured=/^[0-9a-fA-F]{64}$/.test(process.env.OCEAN_STORAGE_KEY_HEX??"");
+  checks.mfaKeyConfigured=/^[0-9a-fA-F]{64}$/.test(process.env.OCEAN_MFA_KEY_HEX??"");
   checks.registrationClosedInProduction=process.env.NODE_ENV!=="production"||
     process.env.OCEAN_SIGNUP_ENABLED!=="true";
   const missing=Object.entries(checks).filter(([,passed])=>!passed).map(([name])=>name);
