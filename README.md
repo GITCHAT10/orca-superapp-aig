@@ -41,3 +41,7 @@ The repository now also contains a Node 22 + Fastify + TypeScript backend under 
 - [PostgreSQL two-tenant CI workflow](.github/workflows/ocean-control-plane.yml)
 - Local setup requires isolated PostgreSQL 16 and a **non-owner**, non-BYPASSRLS application login distinct from migration ownership.
 - `npm install` → `npm run build` → `npm run db:migrate` → `npm test` (requires CI-style test environment). Use synthetic credentials only.
+
+### Controlled MFA milestone
+
+PR #19 includes AES-GCM encrypted TOTP enrollment and RFC 6238/30-second verification with used-code replay denial, a dedicated MFA key, PostgreSQL RLS for MFA secrets, and persistent MFA assurance on issued sessions. The enrollment flow is only permitted in synthetic UAT after password reauthentication, and existing password-only sessions are denied under production policy. Real customer activation remains blocked pending verified onboarding/SSO, secure recovery, external email delivery and operations approval.
