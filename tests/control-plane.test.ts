@@ -4,10 +4,13 @@ import { randomUUID } from "node:crypto";
 import { appPool, withTenant } from "../src/db.js";
 import { createOceanApp } from "../src/app.js";
 import { hashPassword } from "../src/password.js";
+import { totpForStep, unsealMfaSecret } from "../src/mfa.js";
 
 test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activation, usage and audit", async () => {
   process.env.OCEAN_SIGNUP_ENABLED="true";
   process.env.OCEAN_STORAGE_KEY_HEX="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  process.env.OCEAN_MFA_KEY_HEX="abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+  process.env.OCEAN_MFA_UAT_ENABLED="true";
   process.env.NODE_ENV="test";
   const pool=appPool();
   const app=createOceanApp(pool);
@@ -22,7 +25,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     // Readiness must inspect actual PostgreSQL FORCE RLS and a non-owner runtime.
     const readiness=await call("GET","/readyz");
     assert.equal(readiness.status,200,JSON.stringify(readiness.body));
-    assert.equal(readiness.body.checksPassed,5);
+    assert.equal(readiness.body.checksPassed,6);
     const priorKey=process.env.OCEAN_STORAGE_KEY_HEX;
     delete process.env.OCEAN_STORAGE_KEY_HEX;
     const unsafeReadiness=await call("GET","/readyz");
@@ -42,6 +45,57 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
     const bHeaders={"x-ocean-tenant":b.slug,Authorization:"Bearer "+bLogin.body.accessToken};
     assert.equal((await call("GET","/v1/me",undefined,aHeaders)).body.tenantId,aCreated.body.tenantId);
     assert.equal((await call("GET","/v1/me",undefined,bHeaders)).body.tenantId,bCreated.body.tenantId);
+    // RFC6238 MFA: enrollment requires password re-verification, secret
+    // is encrypted in PostgreSQL, and a valid second factor is mandatory
+    // for newly issued sessions after activation.
+    const badEnroll=await call("POST","/v1/auth/mfa/enroll",{password:"not-the-password"},aHeaders);
+    assert.equal(badEnroll.status,401);
+    const enroll=await call("POST","/v1/auth/mfa/enroll",{password:a.password},aHeaders);
+    assert.equal(enroll.status,201,JSON.stringify(enroll.body));
+    assert.ok(enroll.body.provisioningUri.startsWith("otpauth://totp/"));
+    const pendingRecord=await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query<{pending_ciphertext:Buffer;pending_nonce:Buffer;pending_tag:Buffer}>(
+        "SELECT pending_ciphertext,pending_nonce,pending_tag FROM ocean_mfa_credentials WHERE tenant_id=$1 AND user_id=$2",
+        [aCreated.body.tenantId,aCreated.body.ownerId],
+      ));
+    const pending=pendingRecord.rows[0]!;
+    const secret=unsealMfaSecret({
+      ciphertext:pending.pending_ciphertext,
+      nonce:pending.pending_nonce,
+      tag:pending.pending_tag,
+    },aCreated.body.tenantId,aCreated.body.ownerId);
+    assert.equal(secret.length,20);
+    assert.notEqual(pending.pending_ciphertext.toString("hex"),secret.toString("hex"));
+    const step=Math.floor(Date.now()/30000);
+    const confirmOtp=totpForStep(secret,step);
+    const confirmed=await call("POST","/v1/auth/mfa/confirm",{otp:confirmOtp},aHeaders);
+    assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));
+    assert.equal(confirmed.body.enabled,true);
+    assert.equal((await call("GET","/v1/auth/mfa",undefined,aHeaders)).body.enabled,true);
+    assert.equal((await call("POST","/v1/auth/login",{tenantSlug:a.slug,email:a.email,password:a.password})).status,401);
+    const nextOtp=totpForStep(secret,step+1);
+    const mfaLogin=await call("POST","/v1/auth/login",{
+      tenantSlug:a.slug,email:a.email,password:a.password,otp:nextOtp,
+    });
+    assert.equal(mfaLogin.status,200,JSON.stringify(mfaLogin.body));
+    assert.equal((await call("POST","/v1/auth/login",{
+      tenantSlug:a.slug,email:a.email,password:a.password,otp:nextOtp,
+    })).status,401,"Previously accepted time-step must not be reused");
+    const bSecondLogin=await call("POST","/v1/auth/login",{
+      tenantSlug:b.slug,email:b.email,password:b.password,
+    });
+    assert.equal(bSecondLogin.status,200,"A's MFA cannot require a factor for B in test mode");
+    const originalMfaNodeEnv=process.env.NODE_ENV;
+    process.env.NODE_ENV="production";
+    assert.equal((await call("POST","/v1/auth/mfa/enroll",{password:a.password},aHeaders)).status,423);
+    assert.equal((await call("POST","/v1/auth/login",{
+      tenantSlug:b.slug,email:b.email,password:b.password,
+    })).status,401,"Production must reject password-only sign-in");
+    process.env.NODE_ENV=originalMfaNodeEnv;
+    await withTenant(pool,aCreated.body.tenantId,async client=>
+      client.query("DELETE FROM ocean_auth_failures WHERE tenant_id=$1 AND email=$2",[aCreated.body.tenantId,a.email]));
+    // The current enrollment session remains authenticated; older sessions
+    // are revoked at enrollment confirmation.
     // UAT-only onboarding: invitation secrets must be single-use and tied
     // to the correct tenant and exact invited email.
     process.env.OCEAN_INVITATIONS_UAT_ENABLED="true";
@@ -131,7 +185,7 @@ test("real PostgreSQL SaaS kernel: authenticated two-tenant isolation, activatio
       "ocean_subscriptions","ocean_usage_events","ocean_audit_events",
       "ocean_approval_requests","ocean_agent_registry","ocean_event_outbox",
       "ocean_product_adapters","ocean_objects","ocean_model_routes",
-      "ocean_auth_failures","ocean_invitations",
+      "ocean_auth_failures","ocean_invitations","ocean_mfa_credentials",
     ] as const;
     for (const table of protectedTables) {
       const seen=await withTenant(pool,aCreated.body.tenantId,async client=>
